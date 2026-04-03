@@ -1,4 +1,4 @@
-# xiaomi-ax3000t-immortalwrt-hanwckf-firmware-build
+# GL.iNet GL-MT6000 (Flint 2) 自動化雲端編譯腳本 與 xiaomi-ax3000t-immortalwrt-hanwckf-firmware-build
 
 ## Project Overview  
 
