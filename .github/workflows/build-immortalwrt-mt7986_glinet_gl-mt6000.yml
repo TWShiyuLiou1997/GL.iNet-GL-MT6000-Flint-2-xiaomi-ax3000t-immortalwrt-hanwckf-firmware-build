@@ -1,0 +1,171 @@
+name: Build ImmortalWrt (Flint 2 Special)
+
+on:
+  workflow_dispatch:
+
+env:
+  REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x.git
+  REPO_BRANCH: openwrt-21.02
+  TZ: Asia/Shanghai
+  CONFIG_FILE: .config
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+
+jobs:
+  build:
+    name: Build Firmware
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Free disk space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: false
+
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.eu.org/init_build_environment.sh)'
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /srcdir
+          sudo chown $USER:$GROUPS /srcdir
+
+      - name: Clone source code
+        working-directory: /srcdir
+        run: |
+          df -hT $PWD
+          git clone $REPO_URL -b $REPO_BRANCH openwrt
+          ln -sf /srcdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+      - name: Load custom feeds
+        run: |
+          [ -e $DIY_P1_SH ] && chmod +x $DIY_P1_SH && ./$DIY_P1_SH
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load custom config
+        run: |
+          [ -e files ] && mv files openwrt/files
+          [ -e $DIY_P2_SH ] && chmod +x $DIY_P2_SH && ./$DIY_P2_SH
+          
+          cd openwrt
+          # 1. Heart Transplant Logic (Force Flint 2 Config)
+          if [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ]; then
+            mv $GITHUB_WORKSPACE/$CONFIG_FILE .config
+          else
+            echo "CONFIG_TARGET_mediatek=y" > .config
+            echo "CONFIG_TARGET_mediatek_mt7986=y" >> .config
+            echo "CONFIG_TARGET_mediatek_mt7986_DEVICE_glinet_gl-mt6000=y" >> .config
+          fi
+          
+          make defconfig
+
+      - name: Download package
+        id: package
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile the firmware
+        id: compile
+        run: |
+          cd openwrt
+          echo -e "$(nproc) thread compile"
+          
+          # Log Logic: Record everything to build.log (with fallback support)
+          make -j$(nproc) 2>&1 | tee build.log || make -j1 V=s 2>&1 | tee -a build.log
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+          
+          echo "DEVICE_NAME=gl-mt6000" >> $GITHUB_ENV
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+      - name: Check space usage
+        if: (!cancelled())
+        run: df -hT
+
+      - name: Organize, MD5 and Zip
+        id: organize
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        run: |
+          # Move build.log to the firmware folder so it gets packed
+          cp openwrt/build.log openwrt/bin/targets/*/*/build.log
+          
+          # Navigate to firmware directory
+          cd openwrt/bin/targets/*/*
+          rm -rf packages
+          
+          # Generate MD5 (Includes Firmware + Log)
+          md5sum * > md5sum.txt
+          
+          # Zip Package (Firmware + Log + MD5)
+          zip -r ImmortalWrt_${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}.zip ./*
+          
+          echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Upload firmware directory
+        uses: actions/upload-artifact@main
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        with:
+          name: ImmortalWrt_${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: ${{ env.FIRMWARE }}
+
+      - name: Generate release tag
+        id: tag
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        run: |
+          echo "release_tag=ImmortalWrt_Flint2_$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+          touch release.txt
+          echo "## 🏥 ImmortalWrt - Flint 2 (GL-MT6000)" >> release.txt
+          echo "- Source: Hanwckf" >> release.txt
+          echo "- Target: MT7986 (eMMC)" >> release.txt
+          echo "- Package: ZIP (Includes Firmware + Log + MD5)" >> release.txt
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Upload firmware to release
+        id: release
+        uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.status == 'success' && !cancelled()
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          # Upload everything in the target folder (including the Zip)
+          files: ${{ env.FIRMWARE }}/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 7
+          keep_minimum_runs: 3
+
+      - name: Remove old Releases
+        uses: dev-drprasad/delete-older-releases@v0.3.4
+        if: steps.release.outputs.status == 'success' && !cancelled()
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

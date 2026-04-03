@@ -1,0 +1,123 @@
+name: Build U-Boot (Flint 2 Special)
+
+on:
+  workflow_dispatch:
+
+env:
+  REPO_URL: https://github.com/hanwckf/bl-mt798x.git
+  REPO_BRANCH: master
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    name: Build U-Boot
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      actions: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [gl-mt6000]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo -E apt-get -qq install gcc-aarch64-linux-gnu build-essential flex bison libssl-dev device-tree-compiler unzip
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /srcdir
+          sudo chown $USER:$GROUPS /srcdir
+
+      - name: Clone Source Repository
+        working-directory: /srcdir
+        run: |
+          echo "Free space:"
+          df -hT $PWD
+          git clone $REPO_URL -b $REPO_BRANCH u-boot
+          ln -sf /srcdir/u-boot $GITHUB_WORKSPACE/u-boot
+
+      - name: Compile U-Boot
+        id: compile
+        run: |
+          cd u-boot
+          # SOC=mt7986 (Flint 2 Heart)
+          # Log Logic: Record everything to build.log
+          SOC=mt7986 BOARD=${{ matrix.board }} ./build.sh 2>&1 | tee build.log
+          
+          # Move log to output for packaging
+          cp build.log output/
+          
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Generate MD5 and Zip
+        id: package
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        run: |
+          cd u-boot/output
+          
+          # Generate MD5 (Includes build.log now)
+          md5sum * > md5sum.txt
+          
+          # Zip Package (Bin + Log + MD5)
+          zip -r u-boot-${{ matrix.board }}-${{ env.FILE_DATE }}.zip ./*
+          
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Upload bin directory (Original)
+        uses: actions/upload-artifact@main
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        with:
+          name: u-boot_bin_${{ matrix.board }}${{ env.FILE_DATE }}
+          path: u-boot/output
+
+      - name: Generate release tag
+        id: tag
+        if: steps.compile.outputs.status == 'success' && !cancelled()
+        run: |
+          echo "release_tag=U-Boot_Flint2_$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+          touch release.txt
+          echo "## 🏥 U-Boot - Flint 2 (GL-MT6000)" >> release.txt
+          echo "- Source: Hanwckf" >> release.txt
+          echo "- Date: $(date)" >> release.txt
+          echo "- Package: ZIP (Includes BL2 + FIP + Log + MD5)" >> release.txt
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      - name: Upload firmware to release
+        id: release
+        uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.status == 'success' && !cancelled()
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          # Upload everything in output (bins, log, md5, zip)
+          files: u-boot/output/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 7
+          keep_minimum_runs: 3
+
+      - name: Remove old Releases
+        uses: dev-drprasad/delete-older-releases@v0.3.4
+        if: steps.release.outputs.status == 'success' && !cancelled()
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
