@@ -6,7 +6,7 @@ on:
 env:
   REPO_URL: https://github.com/hanwckf/bl-mt798x.git
   REPO_BRANCH: master
-  TZ: Asia/Shanghai
+  TZ: Asia/Taipei
 
 jobs:
   build:
@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        board: [gl-mt6000]
+        board: [glinet_gl-mt6000]
 
     steps:
       - name: Checkout
@@ -49,12 +49,11 @@ jobs:
       - name: Compile U-Boot
         id: compile
         run: |
+          set -o pipefail
           cd u-boot
-          # SOC=mt7986 (Flint 2 Heart)
-          # Log Logic: Record everything to build.log
           SOC=mt7986 BOARD=${{ matrix.board }} ./build.sh 2>&1 | tee build.log
           
-          # Move log to output for packaging
+          mkdir -p output
           cp build.log output/
           
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
@@ -66,10 +65,8 @@ jobs:
         run: |
           cd u-boot/output
           
-          # Generate MD5 (Includes build.log now)
           md5sum * > md5sum.txt
           
-          # Zip Package (Bin + Log + MD5)
           zip -r u-boot-${{ matrix.board }}-${{ env.FILE_DATE }}.zip ./*
           
           echo "status=success" >> $GITHUB_OUTPUT
@@ -100,7 +97,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          # Upload everything in output (bins, log, md5, zip)
           files: u-boot/output/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
