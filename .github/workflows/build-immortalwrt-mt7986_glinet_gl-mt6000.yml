@@ -89,6 +89,7 @@ jobs:
           cd openwrt
           echo -e "$(nproc) thread compile"
           
+          set -o pipefail
           make -j$(nproc) 2>&1 | tee build.log || make -j1 V=s 2>&1 | tee -a build.log
           
           echo "status=success" >> $GITHUB_OUTPUT
@@ -104,10 +105,11 @@ jobs:
         id: organize
         if: steps.compile.outputs.status == 'success' && !cancelled()
         run: |
-          mkdir -p openwrt/bin/targets/mediatek/mt7986
-          cp openwrt/build.log openwrt/bin/targets/mediatek/mt7986/build.log
+          TARGET_DIR=$(ls -d openwrt/bin/targets/*/* | head -n 1)
           
-          cd openwrt/bin/targets/mediatek/mt7986
+          cp openwrt/build.log "$TARGET_DIR/build.log"
+          
+          cd "$TARGET_DIR"
           rm -rf packages
           
           md5sum * > md5sum.txt
