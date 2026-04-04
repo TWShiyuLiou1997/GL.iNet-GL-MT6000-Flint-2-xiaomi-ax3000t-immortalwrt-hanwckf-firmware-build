@@ -6,7 +6,7 @@ on:
 env:
   REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x.git
   REPO_BRANCH: openwrt-21.02
-  TZ: Asia/Shanghai
+  TZ: Asia/Taipei
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
@@ -65,7 +65,6 @@ jobs:
           [ -e $DIY_P2_SH ] && chmod +x $DIY_P2_SH && ./$DIY_P2_SH
           
           cd openwrt
-          # 1. Heart Transplant Logic (Force Flint 2 Config)
           if [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ]; then
             mv $GITHUB_WORKSPACE/$CONFIG_FILE .config
           else
@@ -90,7 +89,6 @@ jobs:
           cd openwrt
           echo -e "$(nproc) thread compile"
           
-          # Log Logic: Record everything to build.log (with fallback support)
           make -j$(nproc) 2>&1 | tee build.log || make -j1 V=s 2>&1 | tee -a build.log
           
           echo "status=success" >> $GITHUB_OUTPUT
@@ -106,17 +104,14 @@ jobs:
         id: organize
         if: steps.compile.outputs.status == 'success' && !cancelled()
         run: |
-          # Move build.log to the firmware folder so it gets packed
-          cp openwrt/build.log openwrt/bin/targets/*/*/build.log
+          mkdir -p openwrt/bin/targets/mediatek/mt7986
+          cp openwrt/build.log openwrt/bin/targets/mediatek/mt7986/build.log
           
-          # Navigate to firmware directory
-          cd openwrt/bin/targets/*/*
+          cd openwrt/bin/targets/mediatek/mt7986
           rm -rf packages
           
-          # Generate MD5 (Includes Firmware + Log)
           md5sum * > md5sum.txt
           
-          # Zip Package (Firmware + Log + MD5)
           zip -r ImmortalWrt_${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}.zip ./*
           
           echo "FIRMWARE=$PWD" >> $GITHUB_ENV
@@ -131,7 +126,7 @@ jobs:
 
       - name: Generate release tag
         id: tag
-        if: steps.compile.outputs.status == 'success' && !cancelled()
+        if: steps.organize.outputs.status == 'success' && !cancelled()
         run: |
           echo "release_tag=ImmortalWrt_Flint2_$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
           touch release.txt
@@ -148,7 +143,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.release_tag }}
           body_path: release.txt
-          # Upload everything in the target folder (including the Zip)
           files: ${{ env.FIRMWARE }}/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
