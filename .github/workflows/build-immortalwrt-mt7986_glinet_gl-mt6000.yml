@@ -65,13 +65,15 @@ jobs:
           [ -e $DIY_P2_SH ] && chmod +x $DIY_P2_SH && ./$DIY_P2_SH
           
           cd openwrt
-          if [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ]; then
-            mv $GITHUB_WORKSPACE/$CONFIG_FILE .config
-          else
-            echo "CONFIG_TARGET_mediatek=y" > .config
-            echo "CONFIG_TARGET_mediatek_mt7986=y" >> .config
-            echo "CONFIG_TARGET_mediatek_mt7986_DEVICE_glinet_gl-mt6000=y" >> .config
-          fi
+          [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cp $GITHUB_WORKSPACE/$CONFIG_FILE .config || touch .config
+          
+          sed -i '/CONFIG_TARGET_mediatek/d' .config
+          sed -i '/CONFIG_TARGET_DEVICE/d' .config
+          sed -i '/CONFIG_TARGET_MULTI_PROFILE/d' .config
+          
+          echo "CONFIG_TARGET_mediatek=y" >> .config
+          echo "CONFIG_TARGET_mediatek_mt7986=y" >> .config
+          echo "CONFIG_TARGET_mediatek_mt7986_DEVICE_glinet_gl-mt6000=y" >> .config
           
           make defconfig
 
